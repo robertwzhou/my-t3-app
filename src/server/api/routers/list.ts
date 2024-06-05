@@ -20,6 +20,9 @@ export const listRouter = createTRPCRouter({
       const newList = await ctx.db.list.create({
         data: {
           name: input.name,
+          user: {
+            connect: { id: ctx.session.user.id },
+          },
         },
       });
       return newList;
