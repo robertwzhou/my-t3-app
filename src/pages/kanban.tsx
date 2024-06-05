@@ -1,27 +1,93 @@
-// src/pages/kanban.tsx
 import { useAtom } from 'jotai';
 import { listsAtom, itemsAtom } from '../atoms';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
+import { api } from '../utils/api';
+import { useSession } from "next-auth/react";
 
 const Kanban = () => {
+  const { data: session } = useSession();
   const [lists, setLists] = useAtom(listsAtom);
   const [items, setItems] = useAtom(itemsAtom);
   const [newList, setNewList] = useState('');
 
-  const addList = () => {
+  const { data, refetch, isLoading } = api.list.getAll.useQuery(undefined, {
+    enabled: !!session, // Only fetch when the session is available
+  });
+
+  const createList = api.list.create.useMutation({
+    onSuccess: () => {
+      console.log('List created successfully');
+      refetch();
+    },
+    onError: (error) => {
+      console.error('Error creating list:', error);
+    },
+  });
+
+  const deleteList = api.list.delete.useMutation({
+    onSuccess: () => {
+      console.log('List deleted successfully');
+      refetch();
+    },
+    onError: (error) => {
+      console.error('Error deleting list:', error);
+    },
+  });
+
+  const addItem = api.list.addItem.useMutation({
+    onSuccess: () => {
+      console.log('Item added successfully');
+      refetch();
+    },
+    onError: (error) => {
+      console.error('Error adding item:', error);
+    },
+  });
+
+  const moveItem = api.list.moveItem.useMutation({
+    onSuccess: () => {
+      console.log('Item moved successfully');
+      refetch();
+    },
+    onError: (error) => {
+      console.error('Error moving item:', error);
+    },
+  });
+
+  useEffect(() => {
+    if (data) {
+      console.log('Fetched data:', data);
+      setLists(data.map((list) => list.name));
+      const itemsMap = data.reduce((acc, list) => {
+        acc[list.name] = list.items.map((item) => item.content);
+        return acc;
+      }, {});
+      setItems(itemsMap);
+    }
+  }, [data, setLists, setItems]);
+
+  const handleAddList = () => {
     if (newList.trim() === '') return;
-    setLists([...lists, newList]);
-    setItems({ ...items, [newList]: [] });
+    console.log('Creating list:', newList);
+    createList.mutate({ name: newList });
     setNewList('');
   };
 
-  const removeList = (list: string) => {
-    const newLists = lists.filter((l) => l !== list);
-    const newItems = { ...items };
-    delete newItems[list];
-    setLists(newLists);
-    setItems(newItems);
+  const handleRemoveList = (listName: string) => {
+    const list = data?.find((l) => l.name === listName);
+    if (list) {
+      console.log('Deleting list:', listName);
+      deleteList.mutate({ id: list.id });
+    }
+  };
+
+  const handleAddItem = (listName: string, content: string) => {
+    const list = data?.find((l) => l.name === listName);
+    if (list) {
+      console.log('Adding item to list:', listName, content);
+      addItem.mutate({ listId: list.id, content });
+    }
   };
 
   const onDragEnd = (result: DropResult) => {
@@ -31,18 +97,30 @@ const Kanban = () => {
     const sourceList = source.droppableId;
     const destList = destination.droppableId;
 
-    const sourceItems = [...items[sourceList]];
-    const [movedItem] = sourceItems.splice(source.index, 1);
-
     if (sourceList === destList) {
-      sourceItems.splice(destination.index, 0, movedItem);
-      setItems({ ...items, [sourceList]: sourceItems });
+      const reorderedItems = Array.from(items[sourceList]);
+      const [movedItem] = reorderedItems.splice(source.index, 1);
+      reorderedItems.splice(destination.index, 0, movedItem);
+      setItems({ ...items, [sourceList]: reorderedItems });
     } else {
-      const destItems = [...items[destList]];
+      const sourceItems = Array.from(items[sourceList]);
+      const [movedItem] = sourceItems.splice(source.index, 1);
+      const destItems = Array.from(items[destList]);
       destItems.splice(destination.index, 0, movedItem);
       setItems({ ...items, [sourceList]: sourceItems, [destList]: destItems });
+
+      const sourceListData = data?.find((l) => l.name === sourceList);
+      const destListData = data?.find((l) => l.name === destList);
+      if (sourceListData && destListData) {
+        const itemToMove = sourceListData.items[source.index];
+        moveItem.mutate({ id: itemToMove.id, toListId: destListData.id });
+      }
     }
   };
+
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
 
   return (
     <div style={{ padding: '20px' }}>
@@ -54,7 +132,7 @@ const Kanban = () => {
         placeholder="New List"
         style={{ marginRight: '10px' }}
       />
-      <button onClick={addList}>Add List</button>
+      <button onClick={handleAddList}>Add List</button>
       <DragDropContext onDragEnd={onDragEnd}>
         <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
           {lists.map((list) => (
@@ -66,8 +144,8 @@ const Kanban = () => {
                   style={{ border: '1px solid black', padding: '10px', width: '200px' }}
                 >
                   <h2>{list}</h2>
-                  <button onClick={() => removeList(list)}>Delete List</button>
-                  <List listName={list} />
+                  <button onClick={() => handleRemoveList(list)}>Delete List</button>
+                  <List listName={list} addItem={handleAddItem} />
                   {provided.placeholder}
                 </div>
               )}
@@ -79,13 +157,13 @@ const Kanban = () => {
   );
 };
 
-const List = ({ listName }) => {
+const List = ({ listName, addItem }) => {
   const [items, setItems] = useAtom(itemsAtom);
   const [newItem, setNewItem] = useState('');
 
-  const addItem = () => {
+  const handleAddItem = () => {
     if (newItem.trim() === '') return;
-    setItems({ ...items, [listName]: [...items[listName], newItem] });
+    addItem(listName, newItem);
     setNewItem('');
   };
 
@@ -98,7 +176,7 @@ const List = ({ listName }) => {
         placeholder="New Item"
         style={{ marginRight: '10px' }}
       />
-      <button onClick={addItem}>Add Item</button>
+      <button onClick={handleAddItem}>Add Item</button>
       <ul style={{ listStyleType: 'none', padding: '0' }}>
         {items[listName]?.map((item, index) => (
           <Draggable key={item} draggableId={item} index={index}>
